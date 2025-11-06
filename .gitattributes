@@ -1,0 +1,12 @@
+# tratta i moduli VBA come testo (CRLF tipico su Windows)
+*.bas text eol=crlf
+*.cls text eol=crlf
+*.frm text eol=crlf
+
+# file risorse dei form: binari, niente diff
+*.frx binary
+
+# aiuta GitHub Linguist a classificarli come VBA
+*.bas linguist-language=VBA
+*.cls linguist-language=VBA
+*.frm linguist-language=VBA
