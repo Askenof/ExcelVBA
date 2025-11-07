@@ -1,48 +1,90 @@
 Attribute VB_Name = "modReports"
 Option Explicit
-Public PageName, RowName, ColumnName, DataName As String
-
+Public PageName As String, RowName As String, ColumnName As String, DataName As String
 
 Sub ShowForm()
 
     frmGenerateReports.Show
     
 End Sub
-
 Sub CreatePivot()
 
-Dim Destination As Range, RangeData As Range
+    Dim Destination As Range
+    Dim RangeData As Range
+    Dim ReportBook As Workbook
+    Dim ReportSheet As Worksheet
+    Dim Cache As PivotCache
 
-    Set Destination = Worksheets("Reports").Range("A1")
-    Set RangeData = Range("A1", Range("I1").End(xlDown))
-    
-    ActiveWorkbook.PivotCaches.Create _
-        (SourceType:=xlDatabase, SourceData:=RangeData) _
-        .CreatePivotTable TableDestination:=Destination, _
+    Set ReportBook = Workbooks("Reports.xlsx")
+    Set ReportSheet = ReportBook.Worksheets("Reports")
+
+    If Application.WorksheetFunction.CountA(ReportSheet.Cells) = 0 Then
+        MsgBox "No data was copied to the Reports sheet. PivotTable generation cancelled.", vbExclamation
+        Exit Sub
+    End If
+
+    Set RangeData = ReportSheet.Range("A1").CurrentRegion
+
+    If Application.WorksheetFunction.CountA(RangeData.Rows(1)) < RangeData.Columns.Count Then
+        MsgBox "The data used to build the PivotTable is missing one or more headers.", vbExclamation
+        Exit Sub
+    End If
+
+    Set Destination = ReportSheet.Range("L1")
+
+    Set Cache = ReportBook.PivotCaches.Create( _
+        SourceType:=xlDatabase, _
+        SourceData:=RangeData.Address(True, True, xlR1C1, True))
+
+    Cache.CreatePivotTable TableDestination:=Destination, _
         TableName:="SalesPivot"
-        
+
 End Sub
 
 Sub SetFields()
+    Dim Table As PivotTable
+    Dim wb As Workbook
+    Dim ws As Worksheet
 
-Dim Table As PivotTable
+    Set wb = Workbooks("Reports.xlsx")
+    Set ws = wb.Worksheets("Reports")
+    Set Table = ws.PivotTables("SalesPivot")
 
-    Set Table = Worksheets("Reports").PivotTables("SalesPivot")
-    
-    With Table
-        .PivotFields(PageName).Orientation = xlPageField
-        .PivotFields(RowName).Orientation = xlRowField
-        .PivotFields(ColumnName).Orientation = xlColumnField
-        .PivotFields(DataName).Orientation = xlDataField
-    End With
-    ActiveWorkbook.Sheets("Reports").Activate
-        If frmGenerateReports.Sales <> "Model" Then
-            Table.PivotSelect "", xlDataOnly
-            Selection.NumberFormat = "$#,##0"
-        End If
-        Range("E1").Select
+    ' Safety: only set fields that exist
+    SafeSetField Table, PageName, xlPageField
+    SafeSetField Table, RowName, xlRowField
+    SafeSetField Table, ColumnName, xlColumnField
+    SafeSetField Table, DataName, xlDataField
+
+    wb.Activate
+    ws.Activate
+    If frmGenerateReports.Sales <> "Model" Then
+        Table.PivotSelect "", xlDataOnly
+        Selection.NumberFormat = "$#,##0"
+    End If
+    ws.Range("E1").Select
+End Sub
+
+Private Sub SafeSetField(ByVal pt As PivotTable, ByVal fldName As String, ByVal orient As XlPivotFieldOrientation)
+    Dim exists As Boolean: exists = False
+    Dim pf As PivotField
+
+    If Len(fldName) = 0 Then Exit Sub
+
+    On Error Resume Next
+    Set pf = pt.PivotFields(fldName)
+    exists = Not pf Is Nothing
+    On Error GoTo 0
+
+    If exists Then
+        pf.Orientation = orient
+    Else
+        ' Optional: tell the user which field was missing
+        ' Debug.Print "Missing Pivot field: " & fldName
+    End If
 
 End Sub
+
 
 Sub ConsolidateData(ThisMonth)
 Dim BeenThere As Boolean
@@ -122,33 +164,27 @@ ActiveSheet.Name = "Reports"
 
 End Sub
 
-Sub GrabCells(StartingCell)
-    Dim CallDate, Where, Where2 As String
-    
-    
-    CallDate = Format(frmGenerateReports.StartDate, "d-mmm-yy")
-    Sheets(CallDate).Select
-        If Range("A2").Value <> Empty Then
-                Where = "B" & StartingCell
-                Where2 = "J" & StartingCell
-                Range(Where, Range(Where2).End(xlDown)).Select
-                Application.CutCopyMode = False
-                Selection.Copy
-                Range("A1").Select
-                Sheets("Reports").Select
-                ActiveSheet.Paste
-                Range("A1").End(xlDown).Offset(1).Select
-        Else
-                If StartingCell = 1 Then
-                        Application.CutCopyMode = False
-                        Range("B1:J1").Select
-                        Selection.Copy
-                        Sheets("Reports").Select
-                        ActiveSheet.Paste
-                        Range("A2").Select
-                End If
-        End If
+Sub GrabCells(StartingCell As Long)
+    Dim callDate As String
+    Dim src As Worksheet, dst As Worksheet
+    Dim lastRow As Long
 
+    callDate = Format(frmGenerateReports.StartDate, "d-mmm-yy")
+    Set src = Sheets(callDate)
+    Set dst = Sheets("Reports")
+
+    ' 1) Ensure headers are written once at A1:J1
+    If StartingCell = 1 Then
+        dst.Range("A1:J1").Value = src.Range("B1:J1").Value
+    End If
+
+    ' 2) Append data rows if any
+    lastRow = src.Cells(src.Rows.Count, "B").End(xlUp).Row
+    If lastRow >= 2 Then
+        src.Range("B2:J" & lastRow).Copy
+        dst.Cells(dst.Rows.Count, "A").End(xlUp).Offset(1).PasteSpecial xlPasteValues
+    End If
+    
 End Sub
 
 Sub FinishReport()
@@ -168,6 +204,30 @@ Sub FinishReport()
     Workbooks("Reports.xlsx").Activate
     ActiveSheet.Paste
     Range("A1").Select
+    ' Ensure the target sheet in Reports.xlsx is named consistently
+    If ActiveSheet.Name <> "Reports" Then
+        On Error Resume Next
+        ActiveSheet.Name = "Reports"
+    On Error GoTo 0
+    End If
+
+' Quick header sanity check before we try to build a Pivot
+    With Workbooks("Reports.xlsx").Worksheets("Reports")
+        If Application.WorksheetFunction.CountA(.Cells) = 0 Then
+            MsgBox "Reports sheet is empty. Aborting pivot creation.", vbExclamation
+        Exit Sub  ' exits FinishReport safely
+    End If
+
+    Dim src As Range
+    Set src = .Range("A1").CurrentRegion
+
+    ' Require a fully populated header row (no blank field names)
+    If Application.WorksheetFunction.CountA(src.Rows(1)) < src.Columns.Count Then
+        MsgBox "Reports sheet has missing/blank headers. Aborting pivot creation.", vbExclamation
+        Exit Sub
+    End If
+End With
+
     Windows("Sales - Fiscal Year.xlsm").Activate
     Application.CutCopyMode = False
     ActiveWindow.SelectedSheets.Delete
